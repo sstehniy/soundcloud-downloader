@@ -60,7 +60,6 @@ func loadPage(browser *rod.Browser, url string) *rod.Page {
 	err := rod.Try(func() {
 		page = browser.
 			MustPage(url).
-			MustSetViewport(1366, 748, 1, false).
 			MustWindowMaximize()
 	})
 
@@ -69,15 +68,6 @@ func loadPage(browser *rod.Browser, url string) *rod.Page {
 	}
 
 	page.MustWaitLoad()
-	page.MustWaitRequestIdle()()
 
-	page.HijackRequests()
-	page.MustScreenshot("screenshot.png")
 	return page
-}
-
-func clickPlayButton(page *rod.Page) {
-	button := page.MustElement(".sc-button-play.playButton.sc-button.m-stretch")
-	fmt.Println("button found")
-	button.MustClick()
 }
