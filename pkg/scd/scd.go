@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,39 +16,13 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
-const (
-	SoundCloudSongSearchURL     = "https://soundcloud.com/search/sounds?q="
-	SoundCloudPlaylistSearchURL = "https://soundcloud.com/search/sets?q="
-	SoundCloudBaseURL           = "https://soundcloud.com"
-)
-
-type SongData struct {
-	Title     string
-	Author    string
-	Url       string
-	Available bool
-}
-
-type PlaylistData struct {
-	Title      string
-	Author     string
-	Url        string
-	TrackCount int
-}
-
-type FetchResponse struct {
-	data  []byte
-	index int
-}
-
-func downloadChunk(url string, index int, arr *[]FetchResponse, bar *progressbar.ProgressBar) {
+func downloadChunk(url string, index int, arr *[]FetchResponse) {
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Printf("failed to fetch the track: %v", err)
 		return
 	}
 	defer resp.Body.Close()
-	bar.Add(1)
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("failed to read bytes from the response: %v", err)
@@ -61,7 +36,7 @@ func downloadChunk(url string, index int, arr *[]FetchResponse, bar *progressbar
 }
 
 func downloadChunks(urls []string) *[]FetchResponse {
-	bar := progressbar.Default(int64(len(urls)), "Track is being downloaded")
+
 	bytesData := make([]FetchResponse, len(urls))
 
 	var wg *sync.WaitGroup = &sync.WaitGroup{}
@@ -69,8 +44,12 @@ func downloadChunks(urls []string) *[]FetchResponse {
 		wg.Add(1)
 
 		go func(url string, index int) {
-			defer wg.Done()
-			downloadChunk(url, index, &bytesData, bar)
+
+			downloadChunk(url, index, &bytesData)
+			defer func() {
+				wg.Done()
+
+			}()
 		}(url, index)
 	}
 
@@ -87,9 +66,7 @@ func SearchSongsByTitle(searchString string) []SongData {
 	page := loadPage(browser, SoundCloudSongSearchURL+strings.Trim(searchString, " "))
 	defer page.MustClose()
 
-	page.MustWaitElementsMoreThan("#onetrust-accept-btn-handler", 0)
-	page.MustElement("#onetrust-accept-btn-handler").MustClick()
-	page.MustWait(`()=>document.querySelector(".onetrust-pc-dark-filter").style.display == "none"`)
+	acceptCookiesAndHandlePage(page)
 
 	if _, err := page.Timeout(500 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
 		return []SongData{}
@@ -124,9 +101,7 @@ func SearchPlaylistsByTitle(searchString string) []PlaylistData {
 	page := loadPage(browser, SoundCloudPlaylistSearchURL+strings.Trim(searchString, " "))
 	defer page.MustClose()
 
-	page.MustWaitElementsMoreThan("#onetrust-accept-btn-handler", 0)
-	page.MustElement("#onetrust-accept-btn-handler").MustClick()
-	page.MustWait(`()=>document.querySelector(".onetrust-pc-dark-filter").style.display == "none"`)
+	acceptCookiesAndHandlePage(page)
 	if _, err := page.Timeout(200 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
 		return []PlaylistData{}
 	}
@@ -210,11 +185,18 @@ func DownloadTrack(songData *SongData) {
 	for _, resp := range chunks {
 		rawBytes = append(rawBytes, resp.data...)
 	}
-	dir := "./new_dir"
+	dir := filepath.Join(".", "new_dir")
 
-	err := os.MkdirAll(dir, os.ModePerm) // create directory if it doesn't exist
-	if err != nil {
-		fmt.Println("Error creating directory:", err)
+	// Check if directory exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		// Create directory if it doesn't exist
+		err = os.MkdirAll(dir, os.ModePerm)
+		if err != nil {
+			fmt.Println("Error creating directory:", err)
+			return
+		}
+	} else if err != nil {
+		fmt.Println("Error checking directory:", err)
 		return
 	}
 	filename := fmt.Sprintf("%s - %s.mp3", songData.Author, songData.Title)
@@ -229,9 +211,7 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 
 	page := loadPage(browser, playlistData.Url)
 
-	page.MustWaitElementsMoreThan("#onetrust-accept-btn-handler", 0)
-	page.MustElement("#onetrust-accept-btn-handler").MustClick()
-	page.MustWait(`()=>document.querySelector(".onetrust-pc-dark-filter").style.display == "none"`)
+	acceptCookiesAndHandlePage(page)
 	currentTracksReveiled := 0
 	for currentTracksReveiled < playlistData.TrackCount {
 		dims := page.MustElement(".trackList__list.sc-clearfix.sc-list-nostyle").MustShape().Box()
@@ -265,17 +245,41 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 	songs := make([]SongData, len(filteredElements))
 	var wg *sync.WaitGroup = &sync.WaitGroup{}
 
-	var mutex sync.Mutex // declare a mutex
+	mutex := &sync.Mutex{} // declare a mutex
 
 	for index, element := range elements {
 		wg.Add(1)
 		go func(element *rod.Element, index int, output *[]SongData, wg *sync.WaitGroup) {
 			mutex.Lock()         // lock the shared variable before modification
 			defer mutex.Unlock() // release the lock after modification
+
+			title, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			if err != nil {
+				title = nil
+			}
+			url, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			if err != nil {
+
+				log.Panicln(err, " url ", index)
+			}
+			author, err := element.Element(".trackItem__username")
+			if err != nil {
+				author = nil
+			}
 			song := SongData{
-				Title:     element.MustElement(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light").MustText(),
-				Url:       SoundCloudBaseURL + *element.MustElement(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light").MustAttribute("href"),
-				Author:    element.MustElement(".trackItem__username").MustText(),
+				Title: func() string {
+					if title == nil {
+						return ""
+					}
+					return title.MustText()
+				}(),
+				Url: SoundCloudBaseURL + *url.MustAttribute("href"),
+				Author: func() string {
+					if author == nil {
+						return ""
+					}
+					return author.MustText()
+				}(),
 				Available: true,
 			}
 			(*output)[index] = song
@@ -283,22 +287,32 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 		}(element, index, &songs, wg)
 	}
 	wg.Wait()
+	songsChunks := createChunks(&songs, 3)
 
-	fmt.Println(len(songs))
-	songsChunks := createSongsChunks(&songs)
-	// for _, song := range songs {
-	// 	if song.Available {
-	// 		DownloadTrack(&song)
-	// 	}
-	// }
+	bar := progressbar.NewOptions(
+		len(songs),
+		progressbar.OptionFullWidth(),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionSetDescription("Downloading"),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionSetItsString(""),
+		progressbar.OptionSpinnerType(11),
+		progressbar.OptionClearOnFinish(),
+		progressbar.OptionShowCount(),
+	)
 
+	finished := []int{}
 	for _, chunk := range songsChunks {
 		wg.Add(len(chunk))
 		for _, song := range chunk {
 			if song.Available {
+				// print finished/total
 				go func(song SongData) {
-					defer wg.Done()
+
 					DownloadTrack(&song)
+					finished = append(finished, 1)
+					bar.Add(1)
+					wg.Done()
 				}(song)
 			} else {
 				wg.Done()
@@ -307,16 +321,11 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 		wg.Wait()
 	}
 
-}
-
-func createSongsChunks(songs *[]SongData) [][]SongData {
-	chunks := [][]SongData{}
-	for i := 0; i < len(*songs); i += 3 {
-		end := i + 3
-		if end > len(*songs) {
-			end = len(*songs)
+	go func() {
+		for {
+			fmt.Printf("%d/%d \r", len(finished), len(songs))
+			time.Sleep(1 * time.Second)
 		}
-		chunks = append(chunks, (*songs)[i:end])
-	}
-	return chunks
+	}()
+
 }
