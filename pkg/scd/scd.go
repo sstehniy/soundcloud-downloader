@@ -87,6 +87,7 @@ func SearchSongsByTitle(searchString string) []SongData {
 	page := loadPage(browser, SoundCloudSongSearchURL+strings.Trim(searchString, " "))
 	defer page.MustClose()
 
+	page.MustWaitElementsMoreThan("#onetrust-accept-btn-handler", 0)
 	page.MustElement("#onetrust-accept-btn-handler").MustClick()
 	page.MustWait(`()=>document.querySelector(".onetrust-pc-dark-filter").style.display == "none"`)
 
@@ -123,6 +124,7 @@ func SearchPlaylistsByTitle(searchString string) []PlaylistData {
 	page := loadPage(browser, SoundCloudPlaylistSearchURL+strings.Trim(searchString, " "))
 	defer page.MustClose()
 
+	page.MustWaitElementsMoreThan("#onetrust-accept-btn-handler", 0)
 	page.MustElement("#onetrust-accept-btn-handler").MustClick()
 	page.MustWait(`()=>document.querySelector(".onetrust-pc-dark-filter").style.display == "none"`)
 	if _, err := page.Timeout(200 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
@@ -227,6 +229,7 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 
 	page := loadPage(browser, playlistData.Url)
 
+	page.MustWaitElementsMoreThan("#onetrust-accept-btn-handler", 0)
 	page.MustElement("#onetrust-accept-btn-handler").MustClick()
 	page.MustWait(`()=>document.querySelector(".onetrust-pc-dark-filter").style.display == "none"`)
 	currentTracksReveiled := 0
