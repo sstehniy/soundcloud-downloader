@@ -40,3 +40,5 @@ bin/
 tmp/
 *.mp3
 .DS_Store
+
+scd

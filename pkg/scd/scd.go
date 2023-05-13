@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -66,7 +67,10 @@ func SearchSongsByTitle(searchString string) []SongData {
 	page := loadPage(browser, SoundCloudSongSearchURL+strings.Trim(searchString, " "))
 	defer page.MustClose()
 
-	acceptCookiesAndHandlePage(page)
+	err := acceptCookiesAndHandlePage(page)
+	if err != nil {
+		log.Println("failed to accept cookies and handle page", err)
+	}
 
 	if _, err := page.Timeout(500 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
 		return []SongData{}
@@ -101,16 +105,61 @@ func SearchPlaylistsByTitle(searchString string) []PlaylistData {
 	page := loadPage(browser, SoundCloudPlaylistSearchURL+strings.Trim(searchString, " "))
 	defer page.MustClose()
 
-	acceptCookiesAndHandlePage(page)
+	err := acceptCookiesAndHandlePage(page)
+	if err != nil {
+		log.Println("failed to accept cookies and handle page", err)
+	}
 	if _, err := page.Timeout(200 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
 		return []PlaylistData{}
 	}
 
 	listItems := page.MustElementsByJS(`() => document.querySelectorAll(".searchList__item")`)
-	if len(listItems) > 5 {
-		listItems = listItems[0:5]
+	if len(listItems) > 10 {
+		listItems = listItems[0:10]
 	}
 	data := createSongDataFromPlaylistSearchResults(listItems)
+	finishedChan <- struct{}{}
+	return data
+}
+
+func SearchAlbumsByTitle(searchString string) []AlbumData {
+	bar := progressbar.NewOptions(-1, progressbar.OptionSetDescription("Searching for albums..."), progressbar.OptionSetItsString(""), progressbar.OptionSpinnerType(11), progressbar.OptionClearOnFinish(), progressbar.OptionSetElapsedTime(false))
+	defer bar.Close()
+	finishedChan := make(chan struct{})
+	go func(bar *progressbar.ProgressBar, finished <-chan struct{}) {
+		for {
+			select {
+			case <-finishedChan:
+				bar.Finish()
+				close(finishedChan)
+				return
+			default:
+				{
+					time.Sleep(time.Millisecond * 500)
+					bar.Add(1)
+				}
+			}
+		}
+	}(bar, finishedChan)
+	browser := setupBrowser()
+
+	defer browser.MustClose()
+	page := loadPage(browser, SoundCloudAlbumSearchURL+strings.Trim(searchString, " "))
+	defer page.MustClose()
+
+	err := acceptCookiesAndHandlePage(page)
+	if err != nil {
+		log.Println("failed to accept cookies and handle page", err)
+	}
+	if _, err := page.Timeout(200 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
+		return []AlbumData{}
+	}
+
+	listItems := page.MustElementsByJS(`() => document.querySelectorAll(".searchList__item")`)
+	if len(listItems) > 10 {
+		listItems = listItems[0:10]
+	}
+	data := createSongDataFromAlbumSearchResults(listItems)
 	finishedChan <- struct{}{}
 	return data
 }
@@ -132,9 +181,34 @@ func createSongDataFromSongSearchResults(listItems []*rod.Element) []SongData {
 }
 
 func createSongDataFromPlaylistSearchResults(listItems []*rod.Element) []PlaylistData {
-	output := make([]PlaylistData, len(listItems))
+	output := []PlaylistData{}
 
-	for index, item := range listItems {
+	for _, item := range listItems {
+		moreThenTen, err := item.Element(".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4")
+		if err == nil {
+			moreThenTen.MustClick()
+			item.MustWait(`() => document.querySelector(".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4").textContent === "View fewer tracks"`)
+		}
+
+		count := len(item.MustElements(".compactTrackList__item"))
+		if count == 0 {
+			continue
+		}
+		output = append(output, PlaylistData{
+			Title:      item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustText(),
+			Author:     item.MustElement(".soundTitle__usernameText").MustText(),
+			Url:        SoundCloudBaseURL + *item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustAttribute("href"),
+			TrackCount: count,
+		})
+
+	}
+	return output
+}
+
+func createSongDataFromAlbumSearchResults(listItems []*rod.Element) []AlbumData {
+	output := []AlbumData{}
+
+	for _, item := range listItems {
 
 		moreThenTen, err := item.Element(".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4")
 		if err == nil {
@@ -143,19 +217,21 @@ func createSongDataFromPlaylistSearchResults(listItems []*rod.Element) []Playlis
 		}
 
 		count := len(item.MustElements(".compactTrackList__item"))
-
-		output[index] = PlaylistData{
+		if count == 0 {
+			continue
+		}
+		output = append(output, AlbumData{
 			Title:      item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustText(),
 			Author:     item.MustElement(".soundTitle__usernameText").MustText(),
 			Url:        SoundCloudBaseURL + *item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustAttribute("href"),
 			TrackCount: count,
-		}
+		})
 
 	}
 	return output
 }
 
-func DownloadTrack(songData *SongData) {
+func DownloadTrack(songData *SongData, parentDir string) {
 	browser := setupBrowser()
 
 	defer browser.MustClose()
@@ -185,7 +261,16 @@ func DownloadTrack(songData *SongData) {
 	for _, resp := range chunks {
 		rawBytes = append(rawBytes, resp.data...)
 	}
-	dir := filepath.Join(".", "new_dir")
+	currentUser, err := user.Current()
+	if err != nil {
+		panic(err)
+	}
+	var dir string
+	if parentDir == "" {
+		dir = filepath.Join(currentUser.HomeDir, "soundcloud-downloader")
+	} else {
+		dir = filepath.Join(currentUser.HomeDir, "soundcloud-downloader", parentDir)
+	}
 
 	// Check if directory exists
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -205,15 +290,35 @@ func DownloadTrack(songData *SongData) {
 }
 
 func DownloadPlaylist(playlistData *PlaylistData) {
+	prepareBar := progressbar.NewOptions(-1, progressbar.OptionSetDescription("Gathering tracks information"), progressbar.OptionSetItsString(""), progressbar.OptionSpinnerType(11), progressbar.OptionClearOnFinish(), progressbar.OptionSetElapsedTime(false), progressbar.OptionSetRenderBlankState(true))
+	triggerCloseBar := make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-triggerCloseBar:
+				return
+			default:
+				prepareBar.Add(1)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+
 	browser := setupBrowser()
 
 	defer browser.MustClose()
 
 	page := loadPage(browser, playlistData.Url)
 
-	acceptCookiesAndHandlePage(page)
+	err := acceptCookiesAndHandlePage(page)
+	if err != nil {
+		log.Println("failed to accept cookies and handle page", err)
+	}
+
 	currentTracksReveiled := 0
 	for currentTracksReveiled < playlistData.TrackCount {
+
 		dims := page.MustElement(".trackList__list.sc-clearfix.sc-list-nostyle").MustShape().Box()
 		page.Mouse.MustScroll(0, dims.Y+dims.Height)
 
@@ -236,10 +341,13 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 	defer page.MustClose()
 
 	filteredElements := []*rod.Element{}
-	for _, element := range elements {
+	notAvailableElements := []int{}
+	for index, element := range elements {
 		_, err := element.Element(".compactTrackListItem__tierIndicator")
 		if err != nil {
 			filteredElements = append(filteredElements, element)
+		} else {
+			notAvailableElements = append(notAvailableElements, index)
 		}
 	}
 	songs := make([]SongData, len(filteredElements))
@@ -262,7 +370,7 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 
 				log.Panicln(err, " url ", index)
 			}
-			author, err := element.Element(".trackItem__username")
+			author, err := element.Element(".trackItem__username.sc-link-light")
 			if err != nil {
 				author = nil
 			}
@@ -287,9 +395,11 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 		}(element, index, &songs, wg)
 	}
 	wg.Wait()
+	triggerCloseBar <- struct{}{}
+	prepareBar.Close()
 	songsChunks := createChunks(&songs, 3)
 
-	bar := progressbar.NewOptions(
+	loadingBar := progressbar.NewOptions(
 		len(songs),
 		progressbar.OptionFullWidth(),
 		progressbar.OptionSetRenderBlankState(true),
@@ -301,17 +411,19 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 		progressbar.OptionShowCount(),
 	)
 
+	if len(notAvailableElements) > 0 {
+		fmt.Println(Colorize("yellow", "Warning: some songs won't be downloaded as they are not available!"))
+	}
+
 	finished := []int{}
 	for _, chunk := range songsChunks {
 		wg.Add(len(chunk))
 		for _, song := range chunk {
 			if song.Available {
-				// print finished/total
 				go func(song SongData) {
-
-					DownloadTrack(&song)
+					DownloadTrack(&song, fmt.Sprintf("%s - %s", playlistData.Title, playlistData.Author))
 					finished = append(finished, 1)
-					bar.Add(1)
+					loadingBar.Add(1)
 					wg.Done()
 				}(song)
 			} else {
@@ -328,4 +440,148 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 		}
 	}()
 
+}
+
+func DownloadAlbum(albumData *AlbumData) {
+	prepareBar := progressbar.NewOptions(-1, progressbar.OptionSetDescription("Gathering tracks information"), progressbar.OptionSetItsString(""), progressbar.OptionSpinnerType(11), progressbar.OptionClearOnFinish(), progressbar.OptionSetElapsedTime(false), progressbar.OptionSetRenderBlankState(true))
+	triggerCloseBar := make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-triggerCloseBar:
+				close(triggerCloseBar)
+				return
+			default:
+				prepareBar.Add(1)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+	browser := setupBrowser()
+
+	defer browser.MustClose()
+
+	page := loadPage(browser, albumData.Url)
+
+	err := acceptCookiesAndHandlePage(page)
+	if err != nil {
+		log.Println("failed to accept cookies and handle page", err)
+	}
+
+	currentTracksReveiled := 0
+	for currentTracksReveiled < albumData.TrackCount {
+
+		dims := page.MustElement(".trackList__list.sc-clearfix.sc-list-nostyle").MustShape().Box()
+		page.Mouse.MustScroll(0, dims.Y+dims.Height)
+
+		page.MustWait(`() => !!Array.from(document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")).slice(-1)[0].querySelector(".trackItem__content.sc-truncate")`)
+		currentTracksReveiled = len(page.MustElementsByJS(`() => document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")`))
+		if currentTracksReveiled == albumData.TrackCount {
+			break
+		}
+	}
+	elements := page.MustElementsByJS(`() => document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")`)
+	if len(elements) == 0 {
+		log.Fatal("no matching elements found")
+	}
+	last := elements[len(elements)-1]
+	shape := last.MustShape()
+	if shape == nil {
+		log.Fatal("element has no shape")
+	}
+	page.Mouse.MustScroll(0, shape.Box().Y)
+	defer page.MustClose()
+
+	filteredElements := []*rod.Element{}
+	notAvailableElements := []int{}
+	for index, element := range elements {
+		_, err := element.Element(".compactTrackListItem__tierIndicator")
+		if err != nil {
+			filteredElements = append(filteredElements, element)
+		} else {
+			notAvailableElements = append(notAvailableElements, index)
+		}
+	}
+	songs := make([]SongData, len(filteredElements))
+	var wg *sync.WaitGroup = &sync.WaitGroup{}
+
+	mutex := &sync.Mutex{} // declare a mutex
+
+	for index, element := range elements {
+		wg.Add(1)
+		go func(element *rod.Element, index int, output *[]SongData, wg *sync.WaitGroup) {
+			mutex.Lock()         // lock the shared variable before modification
+			defer mutex.Unlock() // release the lock after modification
+
+			title, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			if err != nil {
+				title = nil
+			}
+			url, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			if err != nil {
+
+				log.Panicln(err, " url ", index)
+			}
+
+			song := SongData{
+				Title: func() string {
+					if title == nil {
+						return ""
+					}
+					return title.MustText()
+				}(),
+				Url:       SoundCloudBaseURL + *url.MustAttribute("href"),
+				Author:    albumData.Author,
+				Available: true,
+			}
+			(*output)[index] = song
+			wg.Done()
+		}(element, index, &songs, wg)
+	}
+	wg.Wait()
+	triggerCloseBar <- struct{}{}
+	prepareBar.Close()
+	songsChunks := createChunks(&songs, 3)
+
+	loadingBar := progressbar.NewOptions(
+		len(songs),
+		progressbar.OptionFullWidth(),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionSetDescription("Downloading"),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionSetItsString(""),
+		progressbar.OptionSpinnerType(11),
+		progressbar.OptionClearOnFinish(),
+		progressbar.OptionShowCount(),
+	)
+
+	if len(notAvailableElements) > 0 {
+		fmt.Println(Colorize("yellow", "Warning: some songs won't be downloaded as they are not available!"))
+	}
+
+	finished := []int{}
+	for _, chunk := range songsChunks {
+		wg.Add(len(chunk))
+		for _, song := range chunk {
+			if song.Available {
+				go func(song SongData) {
+					DownloadTrack(&song, fmt.Sprintf("%s - %s", albumData.Title, albumData.Author))
+					finished = append(finished, 1)
+					loadingBar.Add(1)
+					wg.Done()
+				}(song)
+			} else {
+				wg.Done()
+			}
+		}
+		wg.Wait()
+	}
+
+	go func() {
+		for {
+			fmt.Printf("%d/%d \r", len(finished), len(songs))
+			time.Sleep(1 * time.Second)
+		}
+	}()
 }
