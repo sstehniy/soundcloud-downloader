@@ -24,3 +24,15 @@ func Colorize(color, text string) string {
 	// Return formatted text with the specified color
 	return fmt.Sprintf("\033[%sm%s\033[0m", code, text)
 }
+
+func createChunks[T any](slice *[]T, size int) [][]T {
+	chunks := [][]T{}
+	for i := 0; i < len(*slice); i += size {
+		end := i + size
+		if end > len(*slice) {
+			end = len(*slice)
+		}
+		chunks = append(chunks, (*slice)[i:end])
+	}
+	return chunks
+}
