@@ -55,9 +55,10 @@ var searchCmd = &cobra.Command{
 				selected := searchResults[userChoice-1]
 
 				fmt.Println("You select the song: " + selected.Title + " by " + selected.Author)
-				fmt.Println("Track url: " + selected.Url)
+				fmt.Println(scd.Colorize("yellow", "Track url: "+selected.Url))
 
 				scd.DownloadTrack(&selected)
+				fmt.Println(scd.Colorize("green", "Download complete!"))
 			}
 		} else if flagP {
 
@@ -88,10 +89,10 @@ var searchCmd = &cobra.Command{
 
 				selected := searchResults[userChoice-1]
 
-				fmt.Println("You select the song: " + selected.Title + " by " + selected.Author)
-				fmt.Println("Track url: " + selected.Url)
+				fmt.Println("You select the playlist: " + selected.Title + " by " + selected.Author)
+				fmt.Println(scd.Colorize("yellow", "Playlist url: "+selected.Url))
 				scd.DownloadPlaylist(&selected)
-
+				fmt.Println(scd.Colorize("green", "Download complete!"))
 			}
 		}
 	},
