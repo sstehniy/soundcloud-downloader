@@ -17,6 +17,22 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
+// CSS Selector Constants
+const (
+	ITEM_QUERY                   = ".searchList__item"
+	TITLE_LINK_QUERY             = ".sc-link-primary.soundTitle__title"
+	AUTHOR_USERNAME_QUERY        = ".soundTitle__usernameText"
+	EMPTY_RESULTS_MESSAGE        = ".sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText"
+	PLAY_BUTTON_QUERY            = ".sc-button-play.playButton.sc-button.sc-button-xlarge.sc-button-disabled"
+	MORE_LINK_QUERY              = ".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4"
+	COMPACT_TRACKLIST_ITEM_QUERY = ".compactTrackList__item"
+	TRACK_LIST_ITEM_QUERY        = ".trackList__item.sc-border-light-bottom.sc-px-2x"
+	TRACK_TITLE_QUERY            = ".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light"
+	TRACK_AUTHOR_QUERY           = ".trackItem__username.sc-link-light"
+	TRACK_LIST_LIST_QUERY        = ".trackList__list.sc-clearfix.sc-list-nostyle"
+	TIER_INDICATOR_QUERY         = ".compactTrackListItem__tierIndicator"
+)
+
 func downloadChunk(url string, index int, arr *[]FetchResponse) {
 	resp, err := http.Get(url)
 	if err != nil {
@@ -72,11 +88,13 @@ func SearchSongsByTitle(searchString string) []SongData {
 		log.Println("failed to accept cookies and handle page", err)
 	}
 
-	if _, err := page.Timeout(500 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
+	if _, err := page.Timeout(500 * time.Microsecond).Element(EMPTY_RESULTS_MESSAGE); err == nil {
 		return []SongData{}
 	}
 
-	listItems := page.MustElementsByJS(`() => document.querySelectorAll(".searchList__item")`)
+	listItems := page.MustElements(ITEM_QUERY)
+
+	fmt.Println("Len results", len(listItems))
 	return createSongDataFromSongSearchResults(listItems)
 }
 
@@ -109,13 +127,13 @@ func SearchPlaylistsByTitle(searchString string) []PlaylistData {
 	if err != nil {
 		log.Println("failed to accept cookies and handle page", err)
 	}
-	if _, err := page.Timeout(200 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
+	if _, err := page.Timeout(200 * time.Microsecond).Element(EMPTY_RESULTS_MESSAGE); err == nil {
 		return []PlaylistData{}
 	}
 
-	listItems := page.MustElementsByJS(`() => document.querySelectorAll(".searchList__item")`)
-	if len(listItems) > 10 {
-		listItems = listItems[0:10]
+	listItems := page.MustElements(ITEM_QUERY)
+	if len(listItems) > 15 {
+		listItems = listItems[0:15]
 	}
 	data := createSongDataFromPlaylistSearchResults(listItems)
 	finishedChan <- struct{}{}
@@ -151,13 +169,14 @@ func SearchAlbumsByTitle(searchString string) []AlbumData {
 	if err != nil {
 		log.Println("failed to accept cookies and handle page", err)
 	}
-	if _, err := page.Timeout(200 * time.Microsecond).Element(`.sc-type-large.sc-text-h3.sc-text-light.sc-text-primary.searchList__emptyText`); err == nil {
+	if _, err := page.Timeout(200 * time.Microsecond).Element(EMPTY_RESULTS_MESSAGE); err == nil {
 		return []AlbumData{}
 	}
 
-	listItems := page.MustElementsByJS(`() => document.querySelectorAll(".searchList__item")`)
-	if len(listItems) > 10 {
-		listItems = listItems[0:10]
+	listItems := page.MustElements(ITEM_QUERY)
+
+	if len(listItems) > 15 {
+		listItems = listItems[0:15]
 	}
 	data := createSongDataFromAlbumSearchResults(listItems)
 	finishedChan <- struct{}{}
@@ -167,13 +186,13 @@ func SearchAlbumsByTitle(searchString string) []AlbumData {
 func createSongDataFromSongSearchResults(listItems []*rod.Element) []SongData {
 	output := []SongData{}
 	for _, item := range listItems {
-		_, err := item.Element(".sc-button-play.playButton.sc-button.sc-button-xlarge.sc-button-disabled")
+		_, err := item.Element(PLAY_BUTTON_QUERY)
 		isDisabled := err != nil
 
 		output = append(output, SongData{
-			Title:     item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustText(),
-			Author:    item.MustElement(".soundTitle__usernameText").MustText(),
-			Url:       SoundCloudBaseURL + *item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustAttribute("href"),
+			Title:     item.MustElement(TITLE_LINK_QUERY).MustText(),
+			Author:    item.MustElement(AUTHOR_USERNAME_QUERY).MustText(),
+			Url:       SoundCloudBaseURL + *item.MustElement(TITLE_LINK_QUERY).MustAttribute("href"),
 			Available: isDisabled,
 		})
 	}
@@ -184,20 +203,20 @@ func createSongDataFromPlaylistSearchResults(listItems []*rod.Element) []Playlis
 	output := []PlaylistData{}
 
 	for _, item := range listItems {
-		moreThenTen, err := item.Element(".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4")
+		moreThenTen, err := item.Element(MORE_LINK_QUERY)
 		if err == nil {
 			moreThenTen.MustClick()
-			item.MustWait(`() => document.querySelector(".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4").textContent === "View fewer tracks"`)
+			item.MustWait(`() => document.querySelector("` + MORE_LINK_QUERY + `").textContent === "View fewer tracks"`)
 		}
 
-		count := len(item.MustElements(".compactTrackList__item"))
+		count := len(item.MustElements(COMPACT_TRACKLIST_ITEM_QUERY))
 		if count == 0 {
 			continue
 		}
 		output = append(output, PlaylistData{
-			Title:      item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustText(),
-			Author:     item.MustElement(".soundTitle__usernameText").MustText(),
-			Url:        SoundCloudBaseURL + *item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustAttribute("href"),
+			Title:      item.MustElement(TITLE_LINK_QUERY).MustText(),
+			Author:     item.MustElement(AUTHOR_USERNAME_QUERY).MustText(),
+			Url:        SoundCloudBaseURL + *item.MustElement(TITLE_LINK_QUERY).MustAttribute("href"),
 			TrackCount: count,
 		})
 
@@ -210,20 +229,20 @@ func createSongDataFromAlbumSearchResults(listItems []*rod.Element) []AlbumData 
 
 	for _, item := range listItems {
 
-		moreThenTen, err := item.Element(".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4")
+		moreThenTen, err := item.Element(MORE_LINK_QUERY)
 		if err == nil {
 			moreThenTen.MustClick()
-			item.MustWait(`() => document.querySelector(".compactTrackList__moreLink.sc-link-light.sc-link-primary.sc-border-light.sc-text-h4").textContent === "View fewer tracks"`)
+			item.MustWait(`() => document.querySelector("` + MORE_LINK_QUERY + `").textContent === "View fewer tracks"`)
 		}
 
-		count := len(item.MustElements(".compactTrackList__item"))
+		count := len(item.MustElements(COMPACT_TRACKLIST_ITEM_QUERY))
 		if count == 0 {
 			continue
 		}
 		output = append(output, AlbumData{
-			Title:      item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustText(),
-			Author:     item.MustElement(".soundTitle__usernameText").MustText(),
-			Url:        SoundCloudBaseURL + *item.MustElement(".sc-link-primary.soundTitle__title.sc-link-dark.sc-text-h4").MustAttribute("href"),
+			Title:      item.MustElement(TITLE_LINK_QUERY).MustText(),
+			Author:     item.MustElement(AUTHOR_USERNAME_QUERY).MustText(),
+			Url:        SoundCloudBaseURL + *item.MustElement(TITLE_LINK_QUERY).MustAttribute("href"),
 			TrackCount: count,
 		})
 
@@ -272,9 +291,7 @@ func DownloadTrack(songData *SongData, parentDir string) {
 		dir = filepath.Join(currentUser.HomeDir, "soundcloud-downloader", parentDir)
 	}
 
-	// Check if directory exists
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		// Create directory if it doesn't exist
 		err = os.MkdirAll(dir, os.ModePerm)
 		if err != nil {
 			fmt.Println("Error creating directory:", err)
@@ -319,16 +336,16 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 	currentTracksReveiled := 0
 	for currentTracksReveiled < playlistData.TrackCount {
 
-		dims := page.MustElement(".trackList__list.sc-clearfix.sc-list-nostyle").MustShape().Box()
+		dims := page.MustElement(TRACK_LIST_LIST_QUERY).MustShape().Box()
 		page.Mouse.MustScroll(0, dims.Y+dims.Height)
 
-		page.MustWait(`() => !!Array.from(document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")).slice(-1)[0].querySelector(".trackItem__content.sc-truncate")`)
-		currentTracksReveiled = len(page.MustElementsByJS(`() => document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")`))
+		page.MustWait(`() => !!Array.from(document.querySelectorAll("` + TRACK_LIST_ITEM_QUERY + `")).slice(-1)[0].querySelector(".trackItem__content.sc-truncate")`)
+		currentTracksReveiled = len(page.MustElements(TRACK_LIST_ITEM_QUERY))
 		if currentTracksReveiled == playlistData.TrackCount {
 			break
 		}
 	}
-	elements := page.MustElementsByJS(`() => document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")`)
+	elements := page.MustElements(TRACK_LIST_ITEM_QUERY)
 	if len(elements) == 0 {
 		log.Fatal("no matching elements found")
 	}
@@ -343,7 +360,7 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 	filteredElements := []*rod.Element{}
 	notAvailableElements := []int{}
 	for index, element := range elements {
-		_, err := element.Element(".compactTrackListItem__tierIndicator")
+		_, err := element.Element(TIER_INDICATOR_QUERY)
 		if err != nil {
 			filteredElements = append(filteredElements, element)
 		} else {
@@ -361,16 +378,16 @@ func DownloadPlaylist(playlistData *PlaylistData) {
 			mutex.Lock()         // lock the shared variable before modification
 			defer mutex.Unlock() // release the lock after modification
 
-			title, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			title, err := element.Element(TRACK_TITLE_QUERY)
 			if err != nil {
 				title = nil
 			}
-			url, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			url, err := element.Element(TRACK_TITLE_QUERY)
 			if err != nil {
 
 				log.Panicln(err, " url ", index)
 			}
-			author, err := element.Element(".trackItem__username.sc-link-light")
+			author, err := element.Element(TRACK_AUTHOR_QUERY)
 			if err != nil {
 				author = nil
 			}
@@ -472,16 +489,16 @@ func DownloadAlbum(albumData *AlbumData) {
 	currentTracksReveiled := 0
 	for currentTracksReveiled < albumData.TrackCount {
 
-		dims := page.MustElement(".trackList__list.sc-clearfix.sc-list-nostyle").MustShape().Box()
+		dims := page.MustElement(TRACK_LIST_LIST_QUERY).MustShape().Box()
 		page.Mouse.MustScroll(0, dims.Y+dims.Height)
 
-		page.MustWait(`() => !!Array.from(document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")).slice(-1)[0].querySelector(".trackItem__content.sc-truncate")`)
-		currentTracksReveiled = len(page.MustElementsByJS(`() => document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")`))
+		page.MustWait(`() => !!Array.from(document.querySelectorAll("` + TRACK_LIST_ITEM_QUERY + `")).slice(-1)[0].querySelector(".trackItem__content.sc-truncate")`)
+		currentTracksReveiled = len(page.MustElements(TRACK_LIST_ITEM_QUERY))
 		if currentTracksReveiled == albumData.TrackCount {
 			break
 		}
 	}
-	elements := page.MustElementsByJS(`() => document.querySelectorAll(".trackList__item.sc-border-light-bottom.sc-px-2x")`)
+	elements := page.MustElements(TRACK_LIST_ITEM_QUERY)
 	if len(elements) == 0 {
 		log.Fatal("no matching elements found")
 	}
@@ -496,7 +513,7 @@ func DownloadAlbum(albumData *AlbumData) {
 	filteredElements := []*rod.Element{}
 	notAvailableElements := []int{}
 	for index, element := range elements {
-		_, err := element.Element(".compactTrackListItem__tierIndicator")
+		_, err := element.Element(TIER_INDICATOR_QUERY)
 		if err != nil {
 			filteredElements = append(filteredElements, element)
 		} else {
@@ -511,14 +528,14 @@ func DownloadAlbum(albumData *AlbumData) {
 	for index, element := range elements {
 		wg.Add(1)
 		go func(element *rod.Element, index int, output *[]SongData, wg *sync.WaitGroup) {
-			mutex.Lock()         // lock the shared variable before modification
-			defer mutex.Unlock() // release the lock after modification
+			mutex.Lock()
+			defer mutex.Unlock()
 
-			title, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			title, err := element.Element(TRACK_TITLE_QUERY)
 			if err != nil {
 				title = nil
 			}
-			url, err := element.Element(".trackItem__trackTitle.sc-link-dark.sc-link-primary.sc-font-light")
+			url, err := element.Element(TRACK_TITLE_QUERY)
 			if err != nil {
 
 				log.Panicln(err, " url ", index)

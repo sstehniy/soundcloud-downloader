@@ -40,7 +40,14 @@ var searchCmd = &cobra.Command{
 				buf := bufio.NewReader(os.Stdin)
 				var userChoice int
 				for {
-					fmt.Print("Please select a song to download: ")
+					targetDownloadString := "song"
+					if flagP {
+						targetDownloadString = "playlist"
+					}
+					if flagA {
+						targetDownloadString = "album"
+					}
+					fmt.Printf("Please select a %s to download: ", targetDownloadString)
 					_, err := fmt.Fscan(buf, &userChoice)
 					if err != nil {
 						fmt.Println("Error: Please enter a valid number.")

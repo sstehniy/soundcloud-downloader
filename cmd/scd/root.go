@@ -12,9 +12,6 @@ var rootCmd = &cobra.Command{
 	Use:     "scd",
 	Version: version,
 	Short:   "scd - a simple CLI for searching and downloading music from souncloud",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Hello")
-	},
 }
 
 func Execute() {

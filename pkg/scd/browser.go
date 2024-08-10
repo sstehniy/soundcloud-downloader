@@ -14,15 +14,18 @@ func setupBrowser() *rod.Browser {
 	ln := launcher.New().
 		Set("no-sandbox", "true").
 		Headless(true).
-		Set("disable-notifications")
+		Set("disable-notifications").
+		// connection timeout -1
+		Set("timeout", "-1").
+		// keep alive
+		Set("keep-alive", "true")
 
 	ctl, err := ln.Launch()
 	if err != nil {
 		log.Println("cannot init launcher", err)
 	}
 
-	browser := rod.New().
-		ControlURL(ctl)
+	browser := rod.New().ControlURL(ctl).NoDefaultDevice()
 
 	err = browser.Connect()
 	if err != nil {
