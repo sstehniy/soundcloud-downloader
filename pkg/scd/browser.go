@@ -15,8 +15,6 @@ func setupBrowser() *rod.Browser {
 		Set("no-sandbox", "true").
 		Headless(true).
 		Set("disable-notifications").
-		// connection timeout -1
-		Set("timeout", "-1").
 		// keep alive
 		Set("keep-alive", "true")
 
